@@ -27,15 +27,69 @@ export interface GeminiUsageMetadata {
 }
 
 /**
+ * Valid thinking levels for Gemini 3+ models.
+ * - "low": Basic tasks (classification, Q&A, chat) - lower latency, lower cost
+ * - "high": Complex reasoning tasks - more careful, thorough analysis (default)
+ */
+export type ThinkingLevel = "low" | "high";
+
+/**
  * Normalized thinking configuration accepted by Gemini.
+ *
+ * For Gemini 2.5: Uses thinkingBudget (numeric token count)
+ * For Gemini 3+: Uses thinkingLevel ("low" | "high")
+ *
+ * Note: thinkingBudget and thinkingLevel are mutually exclusive.
+ * Using both in the same request will cause a 400 error from Gemini API.
  */
 export interface ThinkingConfig {
   thinkingBudget?: number;
+  thinkingLevel?: ThinkingLevel;
   includeThoughts?: boolean;
 }
 
 /**
- * Ensures thinkingConfig is valid: includeThoughts only allowed when budget > 0.
+ * Maps OpenAI reasoning_effort values to Gemini thinking_level.
+ * - "low" → "low"
+ * - "medium" → "high" (OpenAI medium maps to Gemini high per Google docs)
+ * - "high" → "high"
+ */
+function mapReasoningEffortToThinkingLevel(effort: string): ThinkingLevel | undefined {
+  const normalized = effort.toLowerCase();
+  if (normalized === "low") {
+    return "low";
+  }
+  if (normalized === "medium" || normalized === "high") {
+    return "high";
+  }
+  return undefined;
+}
+
+/**
+ * Validates and returns a ThinkingLevel value if valid.
+ */
+function parseThinkingLevel(value: unknown): ThinkingLevel | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.toLowerCase();
+  if (normalized === "low" || normalized === "high") {
+    return normalized;
+  }
+  return undefined;
+}
+
+/**
+ * Normalizes thinking configuration for Gemini API compatibility.
+ *
+ * Handles both Gemini 2.5 (thinkingBudget) and Gemini 3+ (thinkingLevel) configurations.
+ * Also maps OpenAI's reasoning_effort to Gemini's thinking_level for compatibility.
+ *
+ * Key rules:
+ * - thinkingBudget and thinkingLevel are mutually exclusive (API returns 400 if both set)
+ * - thinkingLevel takes precedence if both are provided (for Gemini 3+ compatibility)
+ * - includeThoughts only valid when thinking is enabled (budget > 0 or level set)
+ * - reasoning_effort is mapped: "low" → "low", "medium"/"high" → "high"
  */
 export function normalizeThinkingConfig(config: unknown): ThinkingConfig | undefined {
   if (!config || typeof config !== "object") {
@@ -43,26 +97,66 @@ export function normalizeThinkingConfig(config: unknown): ThinkingConfig | undef
   }
 
   const record = config as Record<string, unknown>;
+
+  // Extract thinkingLevel from various sources (Gemini native)
+  const levelRaw = record.thinkingLevel ?? record.thinking_level;
+
+  // Extract reasoning_effort (OpenAI compatibility)
+  const effortRaw = record.reasoningEffort ?? record.reasoning_effort;
+
+  // Extract thinkingBudget (Gemini 2.5 style)
   const budgetRaw = record.thinkingBudget ?? record.thinking_budget;
+
+  // Extract includeThoughts
   const includeRaw = record.includeThoughts ?? record.include_thoughts;
 
-  const thinkingBudget = typeof budgetRaw === "number" && Number.isFinite(budgetRaw) ? budgetRaw : undefined;
+  // Parse thinking level - try native level first, then mapped effort
+  let thinkingLevel: ThinkingLevel | undefined = parseThinkingLevel(levelRaw);
+  if (!thinkingLevel && typeof effortRaw === "string") {
+    thinkingLevel = mapReasoningEffortToThinkingLevel(effortRaw);
+  }
+
+  // Parse thinking budget (only used if no level is set)
+  const thinkingBudget =
+    typeof budgetRaw === "number" && Number.isFinite(budgetRaw) ? budgetRaw : undefined;
+
+  // Parse includeThoughts
   const includeThoughts = typeof includeRaw === "boolean" ? includeRaw : undefined;
 
-  const enableThinking = thinkingBudget !== undefined && thinkingBudget > 0;
+  // Determine if thinking is enabled
+  const enableThinkingByLevel = thinkingLevel !== undefined;
+  const enableThinkingByBudget = thinkingBudget !== undefined && thinkingBudget > 0;
+  const enableThinking = enableThinkingByLevel || enableThinkingByBudget;
+
+  // includeThoughts only valid when thinking is enabled
   const finalInclude = enableThinking ? includeThoughts ?? false : false;
 
-  if (!enableThinking && finalInclude === false && thinkingBudget === undefined && includeThoughts === undefined) {
+  // Return undefined if nothing meaningful to configure
+  if (
+    !enableThinking &&
+    finalInclude === false &&
+    thinkingLevel === undefined &&
+    thinkingBudget === undefined &&
+    includeThoughts === undefined
+  ) {
     return undefined;
   }
 
+  // Build normalized config - thinkingLevel takes precedence (mutually exclusive)
   const normalized: ThinkingConfig = {};
-  if (thinkingBudget !== undefined) {
+
+  if (thinkingLevel !== undefined) {
+    // Gemini 3+ style: use thinkingLevel, omit thinkingBudget
+    normalized.thinkingLevel = thinkingLevel;
+  } else if (thinkingBudget !== undefined) {
+    // Gemini 2.5 style: use thinkingBudget
     normalized.thinkingBudget = thinkingBudget;
   }
+
   if (finalInclude !== undefined) {
     normalized.includeThoughts = finalInclude;
   }
+
   return normalized;
 }
 
