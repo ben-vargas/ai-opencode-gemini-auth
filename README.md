@@ -90,6 +90,18 @@ or via environment variables:
 You can also set `OPENCODE_GEMINI_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, or
 `GOOGLE_CLOUD_PROJECT_ID` to supply the project ID via environment variables.
 
+### Proxy
+
+If your network requires an HTTP proxy for Google API calls, set
+`OPENCODE_GEMINI_AUTH_PROXY` before starting Opencode:
+
+```bash
+OPENCODE_GEMINI_AUTH_PROXY=http://127.0.0.1:8080 opencode
+```
+
+This is passed to Bun's `fetch` proxy option and applies to OAuth, token
+refresh, project/quota lookup, and Gemini request forwarding.
+
 ### Model list
 
 If you want to remove unusable models from the picker, use OpenCode's
@@ -225,6 +237,10 @@ A combined example showing both model types:
 
 If you don't set a `thinkingConfig` for a model, the plugin will use default
 behavior for that model.
+
+The plugin also accepts request payloads that put `thinkingConfig` at the root
+and normalizes them into `generationConfig.thinkingConfig` before forwarding to
+Gemini Code Assist.
 
 ## Troubleshooting
 
